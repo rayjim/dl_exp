@@ -38,7 +38,8 @@ class RBM(object):
         hbias=None,
         vbias=None,
         numpy_rng=None,
-        theano_rng=None
+        theano_rng=None,
+        weight_cost=2e-4
     ):
         """
         RBM constructor. Defines the parameters of the model along with
@@ -66,6 +67,7 @@ class RBM(object):
 
         self.n_visible = n_visible
         self.n_hidden = n_hidden
+        self.weight_cost = weight_cost
 
         if numpy_rng is None:
             # create a number generator
@@ -315,12 +317,19 @@ class RBM(object):
         gparams = T.grad(cost, self.params, consider_constant=[chain_end])
         # end-snippet-3 start-snippet-4
         # constructs the update dictionary
-        for gparam, param in zip(gparams, self.params):
+        for (gparam, param, indx) in zip(gparams, self.params, range(len(self.params))):
             # make sure that the learning rate is of the right dtype
-            updates[param] = param - gparam * T.cast(
-                lr,
-                dtype=theano.config.floatX
-            )
+            if indx == 0:
+                updates[param] = (param - gparam+self.weight_cost*param) * T.cast(
+                    lr,
+                    dtype=theano.config.floatX
+                )
+            
+            else:
+                updates[param] = param - gparam * T.cast(
+                    lr,
+                    dtype=theano.config.floatX
+                )
         if persistent:
             # Note that this works only if persistent is a shared variable
             updates[persistent] = nh_samples[-1]
