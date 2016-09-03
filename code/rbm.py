@@ -199,26 +199,6 @@ class RBM(object):
         return [pre_sigmoid_v1, v1_mean, v1_sample,
                 pre_sigmoid_h1, h1_mean, h1_sample]
     
-    def gibbs_hvh_gaussian(self, h0_sample):
-        ''' This function implements one step of Gibbs sampling,
-            starting from the hidden state'''
-        pre_sigmoid_v1, v1_mean, v1_sample = self.sample_v_given_h_gaussian(h0_sample)
-        pre_sigmoid_h1, h1_mean, h1_sample = self.sample_h_given_v(v1_sample)
-        return [pre_sigmoid_v1, v1_mean, v1_sample,
-                pre_sigmoid_h1, h1_mean, h1_sample]
-        
-    def sample_v_given_h_gaussian(self, h0_sample):
-        ''' This function infers state of visible units given hidden units '''
-        # compute the activation of the visible given the hidden sample
-        pre_sigmoid_v1, v1_mean = self.propdown(h0_sample)
-        # get a sample of the visible given their activation
-        # Note that theano_rng.binomial returns a symbolic sample of dtype
-        # int64 by default. If we want to keep our computations in floatX
-        # for the GPU we need to specify to return the dtype floatX
-        v1_sample = self.theano_rng.normal(size=v1_mean.shape,
-                                             avg=pre_sigmoid_v1,
-                                             dtype=theano.config.floatX)
-        return [pre_sigmoid_v1, v1_mean, v1_sample]
 
     def gibbs_vhv(self, v0_sample):
         ''' This function implements one step of Gibbs sampling,
@@ -229,7 +209,7 @@ class RBM(object):
                 pre_sigmoid_v1, v1_mean, v1_sample]
 
     # start-snippet-2
-    def get_cost_updates(self, lr=0.1, persistent=None, k=1, is_gaussian = False):
+    def get_cost_updates(self, lr=0.1, persistent=None, k=1):
         """This functions implements one step of CD-k or PCD-k
 
         :param lr: learning rate used to train the RBM
@@ -239,7 +219,6 @@ class RBM(object):
             variable of size (batch size, number of hidden units).
 
         :param k: number of Gibbs steps to do in CD-k/PCD-k
-        :param is_gaussian: determine whether visibile layer is guassian
 
         Returns a proxy for the cost and the updates dictionary. The
         dictionary contains the update rules for weights and biases but
@@ -265,47 +244,26 @@ class RBM(object):
         # Read Theano tutorial on scan for more information :
         # http://deeplearning.net/software/theano/library/scan.html
         # the scan will return the entire Gibbs chain
-        if is_gaussian is True:
-                        (
-                [
-                    pre_sigmoid_nvs,
-                    nv_means,
-                    nv_samples,
-                    pre_sigmoid_nhs,
-                    nh_means,
-                    nh_samples
-                ],
-                updates
-            ) = theano.scan(
-                self.gibbs_hvh_gaussian,
-                # the None are place holders, saying that
-                # chain_start is the initial state corresponding to the
-                # 6th output
-                outputs_info=[None, None, None, None, None, chain_start],
-                n_steps=k,
-                name="gibbs_hvh_gaussian"
-            )
-            
-        else:
-            (
-                [
-                    pre_sigmoid_nvs,
-                    nv_means,
-                    nv_samples,
-                    pre_sigmoid_nhs,
-                    nh_means,
-                    nh_samples
-                ],
-                updates
-            ) = theano.scan(
-                self.gibbs_hvh,
-                # the None are place holders, saying that
-                # chain_start is the initial state corresponding to the
-                # 6th output
-                outputs_info=[None, None, None, None, None, chain_start],
-                n_steps=k,
-                name="gibbs_hvh"
-            )
+
+        (
+            [
+                pre_sigmoid_nvs,
+                nv_means,
+                nv_samples,
+                pre_sigmoid_nhs,
+                nh_means,
+                nh_samples
+            ],
+            updates
+        ) = theano.scan(
+            self.gibbs_hvh,
+            # the None are place holders, saying that
+            # chain_start is the initial state corresponding to the
+            # 6th output
+            outputs_info=[None, None, None, None, None, chain_start],
+            n_steps=k,
+            name="gibbs_hvh"
+        )
         # start-snippet-3
         # determine gradients on RBM parameters
         # note that we only need the sample at the end of the chain
@@ -411,12 +369,17 @@ class RBM(object):
         )
 
         return cross_entropy
+    
+    def reconstruct(self, visible):
+        h = sigmoid(numpy.dot(visible, self.W) + self.hbias)
+        reconstructed_v = sigmoid(numpy.dot(h, self.W.T) + self.vbias)
+        return reconstructed_v
 
 
 def test_rbm(learning_rate=0.1, training_epochs=15,
              dataset='mnist.pkl.gz', batch_size=20,
              n_chains=20, n_samples=10, output_folder='rbm_plots',
-             n_hidden=500, is_gaussian = False):
+             n_hidden=500, k = 1):
     """
     Demonstrate how to train and afterwards sample from it using Theano.
 
@@ -433,6 +396,8 @@ def test_rbm(learning_rate=0.1, training_epochs=15,
     :param n_chains: number of parallel Gibbs chains to be used for sampling
 
     :param n_samples: number of samples to plot for each chain
+    
+    :param k: the number of sampling iteration in Contrast divergence
 
     """
     datasets = load_data(dataset)
@@ -462,7 +427,7 @@ def test_rbm(learning_rate=0.1, training_epochs=15,
 
     # get the cost and the gradient corresponding to one step of CD-15
     cost, updates = rbm.get_cost_updates(lr=learning_rate,
-                                         persistent=persistent_chain, k=15, is_gaussian = is_gaussian)
+                                         persistent=persistent_chain, k=k)
 
     #################################
     #     Training the RBM          #
@@ -594,34 +559,8 @@ def test_rbm(learning_rate=0.1, training_epochs=15,
     # end-snippet-7
     os.chdir('../')
 
-def test_rbm_simple (learning_rate=0.1, k=1, training_epochs=1000):
-    
-    data = numpy.array([[1,1,1,0,0,0],
-                        [1,0,1,0,0,0],
-                        [1,1,1,0,0,0],
-                        [0,0,1,1,1,0],
-                        [0,0,1,1,0,0],
-                        [0,0,1,1,1,0]])
 
-
-    rng = numpy.random.RandomState(123)
-
-    # construct RBM
-    rbm = RBM(input=data, n_visible=6, n_hidden=2, rng=rng)
-
-    # train
-    for epoch in xrange(training_epochs):
-        rbm.contrastive_divergence(lr=learning_rate, k=k)
-        # cost = rbm.get_reconstruction_cross_entropy()
-        # print >> sys.stderr, 'Training epoch %d, cost is ' % epoch, cost
-
-
-    # test
-    v = numpy.array([[1, 1, 0, 0, 0, 0],
-                     [0, 0, 0, 1, 1, 0]])
-
-    print (rbm.reconstruct(v))
 
 if __name__ == '__main__':
-    test_rbm(learning_rate=0.001,is_gaussian=True)
-    test_rbm_simple()
+    test_rbm(learning_rate=0.1, k = 1)
+    

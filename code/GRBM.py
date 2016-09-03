@@ -61,7 +61,7 @@ def test_grbm(learning_rate=0.1, training_epochs=15,
     :param n_samples: number of samples to plot for each chain
 
     """
-    is_gaussian = False
+    
     
     datasets = load_data(dataset)
     train_set_x, train_set_y = datasets[0]
@@ -89,7 +89,7 @@ def test_grbm(learning_rate=0.1, training_epochs=15,
 
     # get the cost and the gradient corresponding to one step of CD-15
     cost, updates = rbm.get_cost_updates(lr=learning_rate,
-                                         persistent=persistent_chain, k=15, is_gaussian = is_gaussian)
+                                         persistent=persistent_chain, k=15)
 
     #################################
     #     Training the RBM          #
