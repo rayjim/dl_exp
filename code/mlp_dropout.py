@@ -12,7 +12,7 @@ from theano.ifelse import ifelse
 import theano.printing
 import theano.tensor.shared_randomstreams
 
-from logistic_sgd import LogisticRegression
+from logistic_sgd_new import LogisticRegression
 from load_data import load_umontreal_data, load_mnist
 
 

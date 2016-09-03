@@ -594,5 +594,34 @@ def test_rbm(learning_rate=0.1, training_epochs=15,
     # end-snippet-7
     os.chdir('../')
 
+def test_rbm_simple (learning_rate=0.1, k=1, training_epochs=1000):
+    
+    data = numpy.array([[1,1,1,0,0,0],
+                        [1,0,1,0,0,0],
+                        [1,1,1,0,0,0],
+                        [0,0,1,1,1,0],
+                        [0,0,1,1,0,0],
+                        [0,0,1,1,1,0]])
+
+
+    rng = numpy.random.RandomState(123)
+
+    # construct RBM
+    rbm = RBM(input=data, n_visible=6, n_hidden=2, rng=rng)
+
+    # train
+    for epoch in xrange(training_epochs):
+        rbm.contrastive_divergence(lr=learning_rate, k=k)
+        # cost = rbm.get_reconstruction_cross_entropy()
+        # print >> sys.stderr, 'Training epoch %d, cost is ' % epoch, cost
+
+
+    # test
+    v = numpy.array([[1, 1, 0, 0, 0, 0],
+                     [0, 0, 0, 1, 1, 0]])
+
+    print (rbm.reconstruct(v))
+
 if __name__ == '__main__':
     test_rbm(learning_rate=0.001,is_gaussian=True)
+    test_rbm_simple()
