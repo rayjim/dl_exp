@@ -27,9 +27,19 @@ class DBN(object):
     used for classification, the DBN is treated as a MLP, by adding a logistic
     regression layer on top.
     """
+    def __get_activation (self,activation = None):
+        
+        if isinstance(activation, str):
+            raise 
+        if activation.lower() == "sigmoid":
+            return T.nnet.sigmoid
+        elif activation.lower() == "relu":
+            return T.nnet.relu
+        else:
+            return ValueError("Sorry, we are now only support sigmoid/ReLu for activation")
 
     def __init__(self, numpy_rng, theano_rng=None, n_ins=784,
-                 hidden_layers_sizes=[500, 500], n_outs=10):
+                 hidden_layers_sizes=[500, 500], n_outs=10, activation_method = "Sigmoid"):
         """This class is made to support a variable number of layers.
 
         :type numpy_rng: numpy.random.RandomState
@@ -55,9 +65,10 @@ class DBN(object):
         self.rbm_layers = []
         self.params = []
         self.n_layers = len(hidden_layers_sizes)
+        self.activation = self.__get_activation(activation_method)
 
         assert self.n_layers > 0
-
+        
         if not theano_rng:
             theano_rng = MRG_RandomStreams(numpy_rng.randint(2 ** 30))
 
@@ -68,6 +79,7 @@ class DBN(object):
 
         # the labels are presented as 1D vector of [int] labels
         self.y = T.ivector('y')
+        
         # end-snippet-1
         # The DBN is an MLP, for which all weights of intermediate
         # layers are shared with a different RBM.  We will first
@@ -102,7 +114,7 @@ class DBN(object):
                                         input=layer_input,
                                         n_in=input_size,
                                         n_out=hidden_layers_sizes[i],
-                                        activation=T.nnet.sigmoid)
+                                        activation=self.activation)
 
             # add the layer to our list of layers
             self.sigmoid_layers.append(sigmoid_layer)
@@ -171,23 +183,11 @@ class DBN(object):
             # get the cost and the updates list
             # using CD-k here (persisent=None) for training each RBM.
             # TODO: change cost function to reconstruction error
-            if i_layer == 0:
-                cost, updates = rbm.get_cost_updates(learning_rate,
-                                                 persistent=None, k=k,is_gaussian=True)
-                                # compile the theano function
-                fn = theano.function(
-                    inputs=[index, theano.In(learning_rate, value=0.001)],
-                    outputs=cost,
-                    updates=updates,
-                    givens={
-                        self.x: train_set_x[batch_begin:batch_end]
-                    }
-                )
-            else:
-                cost, updates = rbm.get_cost_updates(learning_rate,
+
+            cost, updates = rbm.get_cost_updates(learning_rate,
                                                  persistent=None, k=k)
-                # compile the theano function
-                fn = theano.function(
+            # compile the theano function
+            fn = theano.function(
                     inputs=[index, theano.In(learning_rate, value=0.1)],
                     outputs=cost,
                     updates=updates,
