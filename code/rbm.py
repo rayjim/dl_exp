@@ -29,6 +29,17 @@ from logistic_sgd import load_data
 # start-snippet-1
 class RBM(object):
     """Restricted Boltzmann Machine (RBM)  """
+    
+    def __get_activation (self,activation = None):
+        
+        if not isinstance(activation, str):
+            raise TypeError("activation should be a string")
+        if activation.lower() == "sigmoid":
+            return T.nnet.sigmoid
+        elif activation.lower() == "fastsigmoid":
+            return T.nnet.ultra_fast_sigmoid
+        else:
+            return ValueError("Sorry, we are now only support sigmoid/ReLu for activation")
     def __init__(
         self,
         input=None,
@@ -39,7 +50,8 @@ class RBM(object):
         vbias=None,
         numpy_rng=None,
         theano_rng=None,
-        weight_cost=2e-4
+        weight_cost=0,
+        activation_method = "Sigmoid"
     ):
         """
         RBM constructor. Defines the parameters of the model along with
@@ -68,6 +80,7 @@ class RBM(object):
         self.n_visible = n_visible
         self.n_hidden = n_hidden
         self.weight_cost = weight_cost
+        self.activation = self.__get_activation(activation_method)
 
         if numpy_rng is None:
             # create a number generator
@@ -147,8 +160,8 @@ class RBM(object):
         reconstruction cost function)
 
         '''
-        pre_sigmoid_activation = T.dot(vis, self.W) + self.hbias
-        return [pre_sigmoid_activation, T.nnet.sigmoid(pre_sigmoid_activation)]
+        pre_activation = T.dot(vis, self.W) + self.hbias
+        return [pre_activation, self.activation(pre_activation)]
 
     def sample_h_given_v(self, v0_sample):
         ''' This function infers state of hidden units given visible units '''
@@ -175,8 +188,8 @@ class RBM(object):
         reconstruction cost function)
 
         '''
-        pre_sigmoid_activation = T.dot(hid, self.W.T) + self.vbias
-        return [pre_sigmoid_activation, T.nnet.sigmoid(pre_sigmoid_activation)]
+        pre_activation = T.dot(hid, self.W.T) + self.vbias
+        return [pre_activation, self.activation(pre_activation)]
 
     def sample_v_given_h(self, h0_sample):
         ''' This function infers state of visible units given hidden units '''
@@ -278,7 +291,7 @@ class RBM(object):
         for (gparam, param, indx) in zip(gparams, self.params, range(len(self.params))):
             # make sure that the learning rate is of the right dtype
             if indx == 0:
-                updates[param] = (param - gparam+self.weight_cost*param) * T.cast(
+                updates[param] = param -(gparam+self.weight_cost*param) * T.cast(
                     lr,
                     dtype=theano.config.floatX
                 )
@@ -379,7 +392,7 @@ class RBM(object):
 def test_rbm(learning_rate=0.1, training_epochs=15,
              dataset='mnist.pkl.gz', batch_size=20,
              n_chains=20, n_samples=10, output_folder='rbm_plots',
-             n_hidden=500, k = 1):
+             n_hidden=500, k = 1, activation_method = "sigmoid"):
     """
     Demonstrate how to train and afterwards sample from it using Theano.
 
@@ -423,7 +436,7 @@ def test_rbm(learning_rate=0.1, training_epochs=15,
 
     # construct the RBM class
     rbm = RBM(input=x, n_visible=28 * 28,
-              n_hidden=n_hidden, numpy_rng=rng, theano_rng=theano_rng)
+              n_hidden=n_hidden, numpy_rng=rng, theano_rng=theano_rng, activation_method=activation_method)
 
     # get the cost and the gradient corresponding to one step of CD-15
     cost, updates = rbm.get_cost_updates(lr=learning_rate,
@@ -562,5 +575,5 @@ def test_rbm(learning_rate=0.1, training_epochs=15,
 
 
 if __name__ == '__main__':
-    test_rbm(learning_rate=0.1, k = 1)
+    test_rbm(learning_rate=0.1, k = 1, activation_method="fastsigmoid")
     
