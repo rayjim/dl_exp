@@ -34,9 +34,10 @@ class GRBM(RBM):
         # Note that theano_rng.binomial returns a symbolic sample of dtype
         # int64 by default. If we want to keep our computations in floatX
         # for the GPU we need to specify to return the dtype floatX
-        v1_sample = self.theano_rng.normal(size=v1_mean.shape,
-                                             avg=pre_sigmoid_v1,
-                                             dtype=theano.config.floatX)
+        #v1_sample = self.theano_rng.normal(size=v1_mean.shape,
+        #                                     avg=pre_sigmoid_v1,
+        #                                     dtype=theano.config.floatX)
+        v1_sample = v1_mean
         return [pre_sigmoid_v1, v1_mean, v1_sample]
 
 def test_grbm(learning_rate=0.1, training_epochs=15,

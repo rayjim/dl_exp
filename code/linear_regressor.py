@@ -48,8 +48,13 @@ import numpy
 import theano
 import theano.tensor as T
 
+from sklearn import preprocessing
+from sklearn.datasets import load_boston
+from sklearn import datasets
+from sklearn import metrics
+import random
 
-class LogisticRegression(object):
+class LinearRegression(object):
     """Multi-class Logistic Regression Class
 
     The logistic regression is fully described by a weight matrix :math:`W`
@@ -58,7 +63,7 @@ class LogisticRegression(object):
     determine a class membership probability.
     """
 
-    def __init__(self, input, n_in, n_out):
+    def __init__(self, input, n_in, n_out, l1 = 0.0001, l2 = 0.0001):
         """ Initialize the parameters of the logistic regression
 
         :type input: theano.tensor.TensorType
@@ -76,23 +81,10 @@ class LogisticRegression(object):
         """
         # start-snippet-1
         # initialize with 0 the weights W as a matrix of shape (n_in, n_out)
-        self.W = theano.shared(
-            value=numpy.zeros(
-                (n_in, n_out),
-                dtype=theano.config.floatX
-            ),
-            name='W',
-            borrow=True
-        )
+        self.W = theano.shared(numpy.zeros((n_in,),dtype=theano.config.floatX), 
+                               name = 'W', borrow = True)
         # initialize the biases b as a vector of n_out 0s
-        self.b = theano.shared(
-            value=numpy.zeros(
-                (n_out,),
-                dtype=theano.config.floatX
-            ),
-            name='b',
-            borrow=True
-        )
+        self.b = theano.shared(numpy.asarray(0, dtype=theano.config.floatX), name = 'b', borrow = True) 
 
         # symbolic expression for computing the matrix of class-membership
         # probabilities
@@ -102,11 +94,12 @@ class LogisticRegression(object):
         # x is a matrix where row-j  represents input training sample-j
         # b is a vector where element-k represent the free parameter of
         # hyperplane-k
-        self.p_y_given_x = T.nnet.softmax(T.dot(input, self.W) + self.b)
+        self.p_y_given_x = T.dot(input, self.W) + self.b
 
         # symbolic description of how to compute prediction as class whose
         # probability is maximal
-        self.y_pred = T.argmax(self.p_y_given_x, axis=1)
+        #self.y_pred = T.argmax(self.p_y_given_x, axis=1)
+        self.y_pred = self.p_y_given_x
         # end-snippet-1
 
         # parameters of the model
@@ -114,6 +107,13 @@ class LogisticRegression(object):
 
         # keep track of model input
         self.input = input
+        
+        #added l1 and l2 term
+        self.reg_param_L1  = abs(T.sum(self.W) + T.sum(self.b))
+        self.reg_param_L2 = T.sum(T.sqr(self.W)) + T.sum(T.sqr(self.b))
+        self.l1 = l1
+        self.l2 = l2
+        
 
     def negative_log_likelihood(self, y):
         """Return the mean of the negative log-likelihood of the prediction
@@ -144,7 +144,9 @@ class LogisticRegression(object):
         # LP[n-1,y[n-1]]] and T.mean(LP[T.arange(y.shape[0]),y]) is
         # the mean (across minibatch examples) of the elements in v,
         # i.e., the mean log-likelihood across the minibatch.
-        return -T.mean(T.log(self.p_y_given_x)[T.arange(y.shape[0]), y])
+        #return -T.mean(T.log(self.p_y_given_x)[T.arange(y.shape[0]), y])
+        
+        return T.mean(T.sqr(self.p_y_given_x-y))+self.l1*self.reg_param_L1+self.l2*self.reg_param_L2
         # end-snippet-2
 
     def errors(self, y):
@@ -164,12 +166,36 @@ class LogisticRegression(object):
                 ('y', y.type, 'y_pred', self.y_pred.type)
             )
         # check if y is of the correct datatype
-        if y.dtype.startswith('int'):
+        if y.dtype.startswith('float'):
             # the T.neq operator returns a vector of 0s and 1s, where 1
             # represents a mistake in prediction
-            return T.mean(T.neq(self.y_pred, y))
+            return T.mean(T.sqr(self.y_pred-y))
         else:
-            raise NotImplementedError()
+            return T.mean(T.sqr(self.y_pred-y))        
+    
+    def predict(self, variable):
+        """
+        An example of how to load a trained model and use it
+        to predict labels.
+        """
+    
+        # load the saved model
+        classifier = pickle.load(open('best_model.pkl'))
+    
+        # compile a predictor function
+        predict_model = theano.function(
+            inputs=[classifier.input],
+            outputs=classifier.y_pred)
+    
+        # We can test it on some examples from test test
+        dataset='boston'
+        datasets = load_data(boston)
+        test_set_x, test_set_y = datasets[1]
+        test_set_x = test_set_x.get_value()
+    
+        predicted_values = predict_model(test_set_x[:10])
+        print("Predicted values for the first 10 examples in test set:")
+        print(predicted_values)
 
 
 def load_data(dataset):
@@ -182,36 +208,23 @@ def load_data(dataset):
     #############
     # LOAD DATA #
     #############
+    import numpy as np
+    #boston = load_boston()
+    boston = datasets.load_diabetes()
+    print(boston.data.shape)
+    
+    X = boston['data']
+    X = preprocessing.scale(X, axis=0, with_mean=True, with_std=True, copy=False)             # scale data 
+    X = X.astype(np.float32)
+    
+    y = boston['target']
+    y = y.astype(np.float32)
+    
 
-    # Download the MNIST dataset if it is not present
-    data_dir, data_file = os.path.split(dataset)
-    if data_dir == "" and not os.path.isfile(dataset):
-        # Check if dataset is in the data directory.
-        new_path = os.path.join(
-            os.path.split(__file__)[0],
-            "..",
-            "data",
-            dataset
-        )
-        if os.path.isfile(new_path) or data_file == 'mnist.pkl.gz':
-            dataset = new_path
+    train_set = (X[:379,:],y[:379])
+    test_set = (X[379:,:],y[379:])
 
-    if (not os.path.isfile(dataset)) and data_file == 'mnist.pkl.gz':
-        from six.moves import urllib
-        origin = (
-            'http://www.iro.umontreal.ca/~lisa/deep/data/mnist/mnist.pkl.gz'
-        )
-        print('Downloading data from %s' % origin)
-        urllib.request.urlretrieve(origin, dataset)
 
-    print('... loading data')
-
-    # Load the dataset
-    with gzip.open(dataset, 'rb') as f:
-        try:
-            train_set, valid_set, test_set = pickle.load(f, encoding='latin1')
-        except:
-            train_set, valid_set, test_set = pickle.load(f)
     # train_set, valid_set, test_set format: tuple(input, target)
     # input is a numpy.ndarray of 2 dimensions (a matrix)
     # where each row corresponds to an example. target is a
@@ -242,20 +255,20 @@ def load_data(dataset):
         # floats it doesn't make sense) therefore instead of returning
         # ``shared_y`` we will have to cast it to int. This little hack
         # lets ous get around this issue
-        return shared_x, T.cast(shared_y, 'float32')
-    
+        return shared_x, shared_y
+
     test_set_x, test_set_y = shared_dataset(test_set)
-    valid_set_x, valid_set_y = shared_dataset(valid_set)
     train_set_x, train_set_y = shared_dataset(train_set)
 
-    rval = [(train_set_x, train_set_y), (valid_set_x, valid_set_y),
-            (test_set_x, test_set_y)]
+    rval = [(train_set_x, train_set_y)
+            ,(test_set_x, test_set_y)]
     return rval
 
 
-def sgd_optimization_mnist(learning_rate=0.13, n_epochs=1000,
-                           dataset='mnist.pkl.gz',
-                           batch_size=600):
+
+def sgd_optimization_mnist(learning_rate=0.05, n_epochs=10000,
+                           dataset='boston',
+                           batch_size=1):
     """
     Demonstrate stochastic gradient descent optimization of a log-linear
     model
@@ -277,13 +290,10 @@ def sgd_optimization_mnist(learning_rate=0.13, n_epochs=1000,
     datasets = load_data(dataset)
 
     train_set_x, train_set_y = datasets[0]
-    valid_set_x, valid_set_y = datasets[1]
-    test_set_x, test_set_y = datasets[2]
+    test_set_x, test_set_y = datasets[1]
 
     # compute number of minibatches for training, validation and testing
     n_train_batches = train_set_x.get_value(borrow=True).shape[0] // batch_size
-    print ("test",n_train_batches)
-    n_valid_batches = valid_set_x.get_value(borrow=True).shape[0] // batch_size
     n_test_batches = test_set_x.get_value(borrow=True).shape[0] // batch_size
 
     ######################
@@ -297,11 +307,11 @@ def sgd_optimization_mnist(learning_rate=0.13, n_epochs=1000,
     # generate symbolic variables for input (x and y represent a
     # minibatch)
     x = T.matrix('x')  # data, presented as rasterized images
-    y = T.ivector('y')  # labels, presented as 1D vector of [int] labels
+    y = T.fvector('y')  # labels, presented as 1D vector of [int] labels
 
     # construct the logistic regression class
     # Each MNIST image has size 28*28
-    classifier = LogisticRegression(input=x, n_in=28 * 28, n_out=10)
+    classifier = LinearRegression(input=x, n_in=train_set_x.get_value(borrow=True).shape[1], n_out=1)
 
     # the cost we minimize during training is the negative log likelihood of
     # the model in symbolic format
@@ -313,19 +323,11 @@ def sgd_optimization_mnist(learning_rate=0.13, n_epochs=1000,
         inputs=[index],
         outputs=classifier.errors(y),
         givens={
-            x: test_set_x[index * batch_size: (index + 1) * batch_size],
-            y: test_set_y[index * batch_size: (index + 1) * batch_size]
+            x: test_set_x[0:index],
+            y: test_set_y[0:index]
         }
     )
 
-    validate_model = theano.function(
-        inputs=[index],
-        outputs=classifier.errors(y),
-        givens={
-            x: valid_set_x[index * batch_size: (index + 1) * batch_size],
-            y: valid_set_y[index * batch_size: (index + 1) * batch_size]
-        }
-    )
 
     # compute the gradient of cost with respect to theta = (W,b)
     g_W = T.grad(cost=cost, wrt=classifier.W)
@@ -345,9 +347,9 @@ def sgd_optimization_mnist(learning_rate=0.13, n_epochs=1000,
         outputs=cost,
         updates=updates,
         givens={
-            x: train_set_x[index * batch_size: (index + 1) * batch_size],
-            y: train_set_y[index * batch_size: (index + 1) * batch_size]
-        }
+            x: train_set_x[0:index],
+            y: train_set_y[0:index] 
+        },  allow_input_downcast = True
     )
     # end-snippet-3
 
@@ -361,7 +363,7 @@ def sgd_optimization_mnist(learning_rate=0.13, n_epochs=1000,
                                   # found
     improvement_threshold = 0.995  # a relative improvement of this much is
                                   # considered significant
-    validation_frequency = min(n_train_batches, patience // 2)
+    validation_frequency = n_train_batches
                                   # go through this many
                                   # minibatche before checking the network
                                   # on the validation set; in this case we
@@ -373,73 +375,39 @@ def sgd_optimization_mnist(learning_rate=0.13, n_epochs=1000,
 
     done_looping = False
     epoch = 0
-    while (epoch < n_epochs) and (not done_looping):
+    while (epoch < n_epochs):
         epoch = epoch + 1
-        for minibatch_index in range(n_train_batches):
+        
 
-            minibatch_avg_cost = train_model(minibatch_index)
-            print ("the minibatch cost is %f ..............."%minibatch_avg_cost)
-            # iteration number
-            iter = (epoch - 1) * n_train_batches + minibatch_index
+        minibatch_avg_cost = train_model(n_train_batches)
+            #print ("the minibatch cost for %d is %f ..............."%(minibatch_index,minibatch_avg_cost))
+            # iteration numbe
 
-            if (iter + 1) % validation_frequency == 0:
-                # compute zero-one loss on validation set
-                validation_losses = [validate_model(i)
-                                     for i in range(n_valid_batches)]
-                this_validation_loss = numpy.mean(validation_losses)
+        
+        test_losses = test_model(n_train_batches)
+        
+        
+        print(
+            (
+                '     epoch %i, training cost is %f, test error of'
+                ' best model %f'
+            ) %
+            (
+                epoch,
+                minibatch_avg_cost,
+                test_losses
+            )
+        )
 
-                print(
-                    'epoch %i, minibatch %i/%i, validation error %f %%' %
-                    (
-                        epoch,
-                        minibatch_index + 1,
-                        n_train_batches,
-                        this_validation_loss * 100.
-                    )
-                )
 
-                # if we got the best validation score until now
-                if this_validation_loss < best_validation_loss:
-                    #improve patience if loss improvement is good enough
-                    if this_validation_loss < best_validation_loss *  \
-                       improvement_threshold:
-                        patience = max(patience, iter * patience_increase)
-
-                    best_validation_loss = this_validation_loss
-                    # test it on the test set
-
-                    test_losses = [test_model(i)
-                                   for i in range(n_test_batches)]
-                    test_score = numpy.mean(test_losses)
-
-                    print(
-                        (
-                            '     epoch %i, minibatch %i/%i, test error of'
-                            ' best model %f %%'
-                        ) %
-                        (
-                            epoch,
-                            minibatch_index + 1,
-                            n_train_batches,
-                            test_score * 100.
-                        )
-                    )
-
-                    # save the best model
-                    with open('best_model.pkl', 'wb') as f:
-                        pickle.dump(classifier, f)
-
-            if patience <= iter:
-                done_looping = True
-                break
 
     end_time = timeit.default_timer()
     print(
         (
-            'Optimization complete with best validation score of %f %%,'
-            'with test performance %f %%'
+            'Optimization complete,'
+            'with test performance %f '
         )
-        % (best_validation_loss * 100., test_score * 100.)
+        % ( test_losses)
     )
     print('The code run for %d epochs, with %f epochs/sec' % (
         epoch, 1. * epoch / (end_time - start_time)))
@@ -448,29 +416,7 @@ def sgd_optimization_mnist(learning_rate=0.13, n_epochs=1000,
     #       ' ran for %.1fs' % ((end_time - start_time))), file=sys.stderr)
 
 
-def predict():
-    """
-    An example of how to load a trained model and use it
-    to predict labels.
-    """
 
-    # load the saved model
-    classifier = pickle.load(open('best_model.pkl'))
-
-    # compile a predictor function
-    predict_model = theano.function(
-        inputs=[classifier.input],
-        outputs=classifier.y_pred)
-
-    # We can test it on some examples from test test
-    dataset='mnist.pkl.gz'
-    datasets = load_data(dataset)
-    test_set_x, test_set_y = datasets[2]
-    test_set_x = test_set_x.get_value()
-
-    predicted_values = predict_model(test_set_x[:10])
-    print("Predicted values for the first 10 examples in test set:")
-    print(predicted_values)
 
 
 if __name__ == '__main__':

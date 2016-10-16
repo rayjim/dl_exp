@@ -1,3 +1,5 @@
+"""
+"""
 from __future__ import print_function, division
 import os
 import sys
@@ -9,20 +11,39 @@ import theano
 import theano.tensor as T
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 
-from logistic_sgd import LogisticRegression, load_data
+from logistic_sgd import load_data
+from linear_regressor import LinearRegression
 from mlp import HiddenLayer
 from rbm import RBM
-from GRBM import GRBM
-from DBN import DBN
 
-class GDBN(DBN):
-    
+
+# start-snippet-1
+class DBN(object):
+    """Deep Belief Network
+
+    A deep belief network is obtained by stacking several RBMs on top of each
+    other. The hidden layer of the RBM at layer `i` becomes the input of the
+    RBM at layer `i+1`. The first layer RBM gets as input the input of the
+    network, and the hidden layer of the last RBM represents the output. When
+    used for classification, the DBN is treated as a MLP, by adding a logistic
+    regression layer on top.
+    """
+    def __get_activation (self,activation = None):
+        
+        if isinstance(activation, str):
+            raise 
+        if activation.lower() == "sigmoid":
+            return T.nnet.sigmoid
+        elif activation.lower() == "relu":
+            return T.nnet.relu
+        else:
+            return ValueError("Sorry, we are now only support sigmoid/ReLu for activation")
+
     def __init__(self, numpy_rng, theano_rng=None, n_ins=784,
-                 hidden_layers_sizes=[500, 500], n_outs=10):
-           
+                 hidden_layers_sizes=[500, 500], n_outs=1, activation_method = "Sigmoid"):
         """This class is made to support a variable number of layers.
 
-        :type numpy_rng: numpy.random.RandomState
+    :type numpy_rng: numpy.random.RandomState
         :param numpy_rng: numpy random number generator used to draw initial
                     weights
 
@@ -45,9 +66,10 @@ class GDBN(DBN):
         self.rbm_layers = []
         self.params = []
         self.n_layers = len(hidden_layers_sizes)
+        self.activation = T.nnet.sigmoid
 
         assert self.n_layers > 0
-
+        
         if not theano_rng:
             theano_rng = MRG_RandomStreams(numpy_rng.randint(2 ** 30))
 
@@ -57,7 +79,8 @@ class GDBN(DBN):
         self.x = T.matrix('x')
 
         # the labels are presented as 1D vector of [int] labels
-        self.y = T.ivector('y')
+        self.y = T.fvector('y')
+        
         # end-snippet-1
         # The DBN is an MLP, for which all weights of intermediate
         # layers are shared with a different RBM.  We will first
@@ -92,7 +115,7 @@ class GDBN(DBN):
                                         input=layer_input,
                                         n_in=input_size,
                                         n_out=hidden_layers_sizes[i],
-                                        activation=T.nnet.sigmoid)
+                                        activation=self.activation)
 
             # add the layer to our list of layers
             self.sigmoid_layers.append(sigmoid_layer)
@@ -105,30 +128,20 @@ class GDBN(DBN):
             self.params.extend(sigmoid_layer.params)
 
             # Construct an RBM that shared weights with this layer
-            if i == 0:
-                rbm_layer = GRBM(numpy_rng=numpy_rng,
-                                theano_rng=theano_rng,
-                                input=layer_input,
-                                n_visible=input_size,
-                                n_hidden=hidden_layers_sizes[i],
-                                W=sigmoid_layer.W,
-                                hbias=sigmoid_layer.b)
-                
-            else:
-                rbm_layer = RBM(numpy_rng=numpy_rng,
-                                theano_rng=theano_rng,
-                                input=layer_input,
-                                n_visible=input_size,
-                                n_hidden=hidden_layers_sizes[i],
-                                W=sigmoid_layer.W,
-                                hbias=sigmoid_layer.b)
+            rbm_layer = RBM(numpy_rng=numpy_rng,
+                            theano_rng=theano_rng,
+                            input=layer_input,
+                            n_visible=input_size,
+                            n_hidden=hidden_layers_sizes[i],
+                            W=sigmoid_layer.W,
+                            hbias=sigmoid_layer.b)
             self.rbm_layers.append(rbm_layer)
 
         # We now need to add a logistic layer on top of the MLP
-        self.logLayer = LogisticRegression(
+        self.logLayer = LinearRegression(
             input=self.sigmoid_layers[-1].output,
             n_in=hidden_layers_sizes[-1],
-            n_out=n_outs)
+            n_out=n_outs, l2 = 0, l1 = 0)
         self.params.extend(self.logLayer.params)
 
         # compute the cost for second phase of training, defined as the
@@ -139,24 +152,150 @@ class GDBN(DBN):
         # symbolic variable that points to the number of errors made on the
         # minibatch given by self.x and self.y
         self.errors = self.logLayer.errors(self.y)
-    
-    def get_params(self):
-        ls_w = []
-        ls_hbias = []
-        ls_vbias = []
-        for i in range(self.n_layers):
-            ls_w.append(self.rbm_layers[i].W.get_value())
-            ls_hbias.append(self.rbm_layers[i].hbias.get_value())
-            ls_vbias.append(self.rbm_layers[i].vbias.get_value())
-            
-        return ls_w,ls_hbias,ls_vbias
-        
-        
-def test_DBN(finetune_lr=0.1, pretraining_epochs=10,
-             pretrain_lr=0.01, k=1, training_epochs=1000,
+
+    def pretraining_functions(self, train_set_x, batch_size, k):
+        '''Generates a list of functions, for performing one step of
+        gradient descent at a given layer. The function will require
+        as input the minibatch index, and to train an RBM you just
+        need to iterate, calling the corresponding function on all
+        minibatch indexes.
+
+        :type train_set_x: theano.tensor.TensorType
+        :param train_set_x: Shared var. that contains all datapoints used
+                            for training the RBM
+        :type batch_size: int
+        :param batch_size: size of a [mini]batch
+        :param k: number of Gibbs steps to do in CD-k / PCD-k
+
+        '''
+
+        # index to a [mini]batch
+        index = T.lscalar('index')  # index to a minibatch
+        learning_rate = T.scalar('lr')  # learning rate to use
+
+        # begining of a batch, given `index`
+        batch_begin = index * batch_size
+        # ending of a batch given `index`
+        batch_end = batch_begin + batch_size
+
+        pretrain_fns = []
+        for (rbm,i_layer) in zip(self.rbm_layers,range(self.n_layers)):
+
+            # get the cost and the updates list
+            # using CD-k here (persisent=None) for training each RBM.
+            # TODO: change cost function to reconstruction error
+
+            cost, updates = rbm.get_cost_updates(learning_rate,
+                                                 persistent=None, k=k)
+            # compile the theano function
+            fn = theano.function(
+                    inputs=[index, theano.In(learning_rate, value=0.1)],
+                    outputs=cost,
+                    updates=updates,
+                    givens={
+                        self.x: train_set_x[batch_begin:batch_end]
+                    }
+                )
+            # append `fn` to the list of functions
+            pretrain_fns.append(fn)
+
+        return pretrain_fns
+
+    def build_finetune_functions(self, datasets, batch_size, learning_rate):
+        '''Generates a function `train` that implements one step of
+        finetuning, a function `validate` that computes the error on a
+        batch from the validation set, and a function `test` that
+        computes the error on a batch from the testing set
+
+        :type datasets: list of pairs of theano.tensor.TensorType
+        :param datasets: It is a list that contain all the datasets;
+                        the has to contain three pairs, `train`,
+                        `valid`, `test` in this order, where each pair
+                        is formed of two Theano variables, one for the
+                        datapoints, the other for the labels
+        :type batch_size: int
+        :param batch_size: size of a minibatch
+        :type learning_rate: float
+        :param learning_rate: learning rate used during finetune stage
+
+        '''
+
+        (train_set_x, train_set_y) = datasets[0]
+        (valid_set_x, valid_set_y) = datasets[1]
+        (test_set_x, test_set_y) = datasets[2]
+
+        # compute number of minibatches for training, validation and testing
+        n_valid_batches = valid_set_x.get_value(borrow=True).shape[0]
+        n_valid_batches //= batch_size
+        n_test_batches = test_set_x.get_value(borrow=True).shape[0]
+        n_test_batches //= batch_size
+
+        index = T.lscalar('index')  # index to a [mini]batch
+
+        # compute the gradients with respect to the model parameters
+        gparams = T.grad(self.finetune_cost, self.params)
+
+        # compute list of fine-tuning updates
+        updates = []
+        for param, gparam in zip(self.params, gparams):
+            updates.append((param, param - gparam * learning_rate))
+
+        train_fn = theano.function(
+            inputs=[index],
+            outputs=self.finetune_cost,
+            updates=updates,
+            givens={
+                self.x: train_set_x[
+                    index * batch_size: (index + 1) * batch_size
+                ],
+                self.y: train_set_y[
+                    index * batch_size: (index + 1) * batch_size
+                ]
+            }
+        )
+
+        test_score_i = theano.function(
+            [index],
+            self.errors,
+            givens={
+                self.x: test_set_x[
+                    index * batch_size: (index + 1) * batch_size
+                ],
+                self.y: test_set_y[
+                    index * batch_size: (index + 1) * batch_size
+                ]
+            }
+        )
+
+        valid_score_i = theano.function(
+            [index],
+            self.errors,
+            givens={
+                self.x: valid_set_x[
+                    index * batch_size: (index + 1) * batch_size
+                ],
+                self.y: valid_set_y[
+                    index * batch_size: (index + 1) * batch_size
+                ]
+            }
+        )
+
+        # Create a function that scans the entire validation set
+        def valid_score():
+            return [valid_score_i(i) for i in range(n_valid_batches)]
+
+        # Create a function that scans the entire test set
+        def test_score():
+            return [test_score_i(i) for i in range(n_test_batches)]
+
+        return train_fn, valid_score, test_score
+
+
+def test_DBN(finetune_lr=0.01, pretraining_epochs=100,
+             pretrain_lr=0.01, k=2, training_epochs=1000,
              dataset='mnist.pkl.gz', batch_size=100):
     """
-    Demonstrates how to train and test a Gaussian Deep Belief Network.
+    Demonstrates how to train and test a Deep Belief Network.
 
     This is demonstrated on MNIST.
 
@@ -181,18 +320,18 @@ def test_DBN(finetune_lr=0.1, pretraining_epochs=10,
     train_set_x, train_set_y = datasets[0]
     valid_set_x, valid_set_y = datasets[1]
     test_set_x, test_set_y = datasets[2]
+    
 
     # compute number of minibatches for training, validation and testing
     n_train_batches = train_set_x.get_value(borrow=True).shape[0] // batch_size
 
     # numpy random generator
-    import numpy
     numpy_rng = numpy.random.RandomState(123)
     print('... building the model')
     # construct the Deep Belief Network
-    dbn = GDBN(numpy_rng=numpy_rng, n_ins=28 * 28,
-              hidden_layers_sizes=[1000,1000,1000],
-              n_outs=10)
+    dbn = DBN(numpy_rng=numpy_rng, n_ins=28 * 28,
+              hidden_layers_sizes=[1000, 1000, 1000,1000],
+              n_outs=1)
 
     # start-snippet-2
     #########################
@@ -259,7 +398,6 @@ def test_DBN(finetune_lr=0.1, pretraining_epochs=10,
 
     done_looping = False
     epoch = 0
-    ls_w1,ls_hbias1,ls_vbias1 = dbn.get_params()
 
     while (epoch < training_epochs) and (not done_looping):
         epoch = epoch + 1
@@ -269,18 +407,14 @@ def test_DBN(finetune_lr=0.1, pretraining_epochs=10,
             iter = (epoch - 1) * n_train_batches + minibatch_index
 
             if (iter + 1) % validation_frequency == 0:
-                ls_w2,ls_hbias2,ls_vbias2 = dbn.get_params()              
-                print ((ls_vbias2[0]))
-                print ("###############")
-                print (numpy.max(ls_w2[0]-ls_w1[0]))
 
                 validation_losses = validate_model()
                 this_validation_loss = numpy.mean(validation_losses)
-                print('epoch %i, minibatch %i/%i, validation error %f %%' % (
+                print('epoch %i, minibatch %i/%i, validation error %f ' % (
                     epoch,
                     minibatch_index + 1,
                     n_train_batches,
-                    this_validation_loss * 100.
+                    this_validation_loss 
                     )
                 )
 
@@ -300,24 +434,37 @@ def test_DBN(finetune_lr=0.1, pretraining_epochs=10,
                     test_losses = test_model()
                     test_score = numpy.mean(test_losses)
                     print(('     epoch %i, minibatch %i/%i, test error of '
-                           'best model %f %%') %
+                           'best model %f') %
                           (epoch, minibatch_index + 1, n_train_batches,
-                          test_score * 100.))
+                          test_score ))
 
             if patience <= iter:
                 done_looping = True
                 break
 
     end_time = timeit.default_timer()
-    print(('Optimization complete with best validation score of %f %%, '
+    print(('Optimization complete with best validation score of %f , '
            'obtained at iteration %i, '
-           'with test performance %f %%'
-           ) % (best_validation_loss * 100., best_iter + 1, test_score * 100.))
+           'with test performance %f '
+           ) % (best_validation_loss, best_iter + 1, test_score))
     print('The fine tuning code for file ' + os.path.split(__file__)[1] +
           ' ran for %.2fm' % ((end_time - start_time) / 60.), file=sys.stderr)
+    get_results = theano.function(
+            [],
+            [dbn.logLayer.y_pred,dbn.y],
+            givens={
+                  dbn.x: test_set_x[
+                    0:10
+                ],
+                  dbn.y: test_set_y[0:10]
+            }
+        )
+    
+    y_pred, y_true = get_results()
+    print (y_pred)
+    print (y_true)
     
 
-        
-        
+
 if __name__ == '__main__':
-    test_DBN()        
+    test_DBN()
